@@ -38,7 +38,7 @@ api_logs_col = db['api_logs']
 settings_col = db['settings']
 users_col = db['users']
 bot_states_col = db['bot_states']
-apis_col = db['apis']  # Naya collection for APIs
+apis_col = db['apis']
 
 # ==================== INITIALIZE DATABASE ====================
 def init_db():
@@ -65,7 +65,7 @@ def init_db():
             "updated_at": datetime.utcnow()
         })
     
-    # Initialize APIs - SIRF WORKING API ADD KARO
+    # Initialize APIs
     if apis_col.count_documents({}) == 0:
         default_apis = [
             {
@@ -79,11 +79,22 @@ def init_db():
                 "last_checked": datetime.utcnow(),
                 "added_by": "system",
                 "notes": "Working API - Primary"
+            },
+            {
+                "name": "Backup API",
+                "url": "https://z4x-telegram-to-number-api.onrender.com/search?key=Z4X-ERO8MSL9-Silent&userid={user_id}",
+                "method": "GET",
+                "status": "inactive",
+                "priority": 2,
+                "success_count": 0,
+                "fail_count": 0,
+                "last_checked": datetime.utcnow(),
+                "added_by": "system",
+                "notes": "Backup API"
             }
-            # ❌ REMOVED: z4x-telegram-to-number-api (not working - 403 error)
         ]
         apis_col.insert_many(default_apis)
-        print("✅ Default APIs initialized (only working APIs)")
+        print("✅ Default APIs initialized")
     
     print("✅ Database initialized")
 
@@ -92,7 +103,6 @@ init_db()
 # ==================== TELEGRAM BOT FUNCTIONS ====================
 
 def send_telegram_message(chat_id, text, parse_mode='HTML'):
-    """Send message to Telegram"""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         'chat_id': chat_id,
@@ -107,13 +117,8 @@ def send_telegram_message(chat_id, text, parse_mode='HTML'):
         return None
 
 def send_telegram_with_keyboard(chat_id, text, buttons, parse_mode='HTML'):
-    """Send message with inline keyboard"""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    
-    keyboard = {
-        "inline_keyboard": buttons
-    }
-    
+    keyboard = {"inline_keyboard": buttons}
     payload = {
         'chat_id': chat_id,
         'text': text,
@@ -128,7 +133,6 @@ def send_telegram_with_keyboard(chat_id, text, buttons, parse_mode='HTML'):
         return None
 
 def answer_callback(chat_id, callback_query_id, text):
-    """Answer callback query"""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery"
     payload = {
         'callback_query_id': callback_query_id,
@@ -141,13 +145,11 @@ def answer_callback(chat_id, callback_query_id, text):
         print(f"Callback answer error: {e}")
 
 def is_admin(user_id):
-    """Check if user is admin"""
     return user_id in TELEGRAM_ADMIN_IDS
 
 # ==================== BOT STATE MANAGEMENT ====================
 
 def set_user_state(user_id, state, data=None):
-    """Set user's bot state"""
     bot_states_col.update_one(
         {"user_id": user_id},
         {"$set": {
@@ -159,14 +161,12 @@ def set_user_state(user_id, state, data=None):
     )
 
 def get_user_state(user_id):
-    """Get user's bot state"""
     state = bot_states_col.find_one({"user_id": user_id})
     if state:
         return state.get('state'), state.get('data', {})
     return None, {}
 
 def clear_user_state(user_id):
-    """Clear user's bot state"""
     bot_states_col.delete_one({"user_id": user_id})
 
 # ==================== API MANAGEMENT FUNCTIONS ====================
@@ -174,7 +174,7 @@ def clear_user_state(user_id):
 def test_api_health(api):
     """Test if an API is working"""
     try:
-        test_user_id = "7459756974"  # Known working ID
+        test_user_id = "7459756974"
         url = api['url'].format(user_id=test_user_id)
         
         start_time = time.time()
@@ -183,35 +183,24 @@ def test_api_health(api):
         
         if response.status_code == 200:
             data = response.json()
+            # Handle multiple response formats
             if data.get("status") == "success" and data.get("data"):
-                return {
-                    "working": True,
-                    "response_time": response_time,
-                    "status_code": response.status_code
-                }
+                return {"working": True, "response_time": response_time, "status_code": response.status_code}
+            elif data.get("success") == True and data.get("number"):
+                return {"working": True, "response_time": response_time, "status_code": response.status_code}
         
-        return {
-            "working": False,
-            "response_time": response_time,
-            "status_code": response.status_code,
-            "error": "Invalid response format"
-        }
+        return {"working": False, "response_time": response_time, "status_code": response.status_code}
     except Exception as e:
-        return {
-            "working": False,
-            "error": str(e)
-        }
+        return {"working": False, "error": str(e)}
 
 def get_active_apis():
-    """Get all active APIs sorted by priority"""
     return list(apis_col.find({"status": "active"}).sort("priority", 1))
 
-# ==================== UPDATED SEARCH FUNCTION WITH FAILOVER ====================
+# ==================== UPDATED SEARCH FUNCTION - FIXED FORMAT ====================
 
 def search_telegram_id(user_id):
-    """Search using active APIs with automatic failover"""
+    """Search using active APIs with automatic failover - Handles multiple response formats"""
     
-    # Get all active APIs
     active_apis = get_active_apis()
     
     if not active_apis:
@@ -224,10 +213,8 @@ def search_telegram_id(user_id):
             "channel": "https://t.me/WebBot_Lab"
         }
     
-    results = []
     errors = []
     
-    # Try each API in priority order
     for api in active_apis:
         try:
             print(f"Trying API: {api['name']} for userid: {user_id}")
@@ -244,6 +231,9 @@ def search_telegram_id(user_id):
                     {"$inc": {"success_count": 1}, "$set": {"last_checked": datetime.utcnow()}}
                 )
                 
+                # ===== HANDLE MULTIPLE RESPONSE FORMATS =====
+                
+                # Format 1: {"status":"success","data":{"country":"...","number":"..."}}
                 if data.get("status") == "success" and data.get("data"):
                     return {
                         "status": "success",
@@ -260,14 +250,50 @@ def search_telegram_id(user_id):
                         "owner": "@VIP_X_OFFICIAL",
                         "channel": "https://t.me/WebBot_Lab"
                     }
-            else:
-                # Update fail count
-                apis_col.update_one(
-                    {"_id": api['_id']},
-                    {"$inc": {"fail_count": 1}, "$set": {"last_checked": datetime.utcnow()}}
-                )
-                errors.append(f"{api['name']}: HTTP {response.status_code}")
                 
+                # Format 2: {"success":true,"country":"India","number":"..."} (Vercel format)
+                elif data.get("success") == True and data.get("number"):
+                    return {
+                        "status": "success",
+                        "code": 200,
+                        "searched_userid": user_id,
+                        "response_time": "N/A",
+                        "data": {
+                            "found": True,
+                            "country": data.get("country"),
+                            "country_code": data.get("country_code", "+91"),
+                            "number": data.get("number")
+                        },
+                        "source": api['name'],
+                        "owner": "@VIP_X_OFFICIAL",
+                        "channel": "https://t.me/WebBot_Lab"
+                    }
+                
+                # Format 3: Direct fields
+                elif data.get("number"):
+                    return {
+                        "status": "success",
+                        "code": 200,
+                        "searched_userid": user_id,
+                        "response_time": "N/A",
+                        "data": {
+                            "found": True,
+                            "country": data.get("country", "Unknown"),
+                            "country_code": data.get("country_code", "+91"),
+                            "number": data.get("number")
+                        },
+                        "source": api['name'],
+                        "owner": "@VIP_X_OFFICIAL",
+                        "channel": "https://t.me/WebBot_Lab"
+                    }
+            
+            # Update fail count
+            apis_col.update_one(
+                {"_id": api['_id']},
+                {"$inc": {"fail_count": 1}, "$set": {"last_checked": datetime.utcnow()}}
+            )
+            errors.append(f"{api['name']}: HTTP {response.status_code}")
+            
         except Exception as e:
             errors.append(f"{api['name']}: {str(e)}")
             apis_col.update_one(
@@ -361,10 +387,9 @@ def validate_api_key(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# ==================== BOT COMMAND HANDLERS ====================
+# ==================== BOT COMMAND HANDLERS (simplified) ====================
 
 def handle_start(chat_id, user_id):
-    """Handle /start command"""
     if not is_admin(user_id):
         send_telegram_message(chat_id, "❌ Unauthorized! You are not an admin.")
         return
@@ -377,8 +402,8 @@ def handle_start(chat_id, user_id):
         "/stats - View API statistics\n"
         "/keys - Manage API keys\n"
         "/createkey - Create new API key\n"
+        "/apis - Manage source APIs\n"
         "/logs - View recent logs\n"
-        "/apis - Manage source APIs\n"  # New command
         "/settings - Bot settings\n"
         "/help - Show help"
     )
@@ -387,427 +412,14 @@ def handle_start(chat_id, user_id):
         [{"text": "📊 Statistics", "callback_data": "stats"}],
         [{"text": "🔑 Manage Keys", "callback_data": "list_keys"}],
         [{"text": "➕ Create Key", "callback_data": "create_key"}],
-        [{"text": "🌐 Manage APIs", "callback_data": "list_apis"}],  # New button
+        [{"text": "🌐 Manage APIs", "callback_data": "list_apis"}],
         [{"text": "📋 Recent Logs", "callback_data": "logs"}],
         [{"text": "⚙️ Settings", "callback_data": "settings"}]
     ]
     
     send_telegram_with_keyboard(chat_id, text, buttons)
 
-def handle_list_apis(chat_id, user_id):
-    """List all configured APIs"""
-    if not is_admin(user_id):
-        return
-    
-    apis = list(apis_col.find().sort("priority", 1))
-    
-    if not apis:
-        send_telegram_message(chat_id, "❌ No APIs configured!")
-        return
-    
-    text = "🌐 <b>Configured APIs</b>\n\n"
-    buttons = []
-    
-    for api in apis:
-        status_emoji = "✅" if api['status'] == 'active' else "❌"
-        success_rate = 0
-        total = api.get('success_count', 0) + api.get('fail_count', 0)
-        if total > 0:
-            success_rate = (api['success_count'] / total) * 100
-        
-        text += (
-            f"{status_emoji} <b>{api['name']}</b>\n"
-            f"├ Priority: {api['priority']}\n"
-            f"├ Success: {api.get('success_count', 0)}/{total}\n"
-            f"├ Rate: {success_rate:.1f}%\n"
-            f"└ Last: {api.get('last_checked', datetime.utcnow()).strftime('%H:%M')}\n\n"
-        )
-        
-        buttons.append([{"text": f"🔧 Manage {api['name']}", "callback_data": f"view_api_{api['_id']}"}])
-    
-    buttons.append([{"text": "➕ Add New API", "callback_data": "add_api"}])
-    buttons.append([{"text": "🔄 Test All APIs", "callback_data": "test_all_apis"}])
-    buttons.append([{"text": "🔙 Main Menu", "callback_data": "main_menu"}])
-    
-    send_telegram_with_keyboard(chat_id, text, buttons)
-
-def handle_view_api(chat_id, user_id, api_id):
-    """View single API details"""
-    if not is_admin(user_id):
-        return
-    
-    try:
-        api = apis_col.find_one({"_id": ObjectId(api_id)})
-        if not api:
-            send_telegram_message(chat_id, "❌ API not found!")
-            return
-        
-        total = api.get('success_count', 0) + api.get('fail_count', 0)
-        success_rate = (api['success_count'] / total * 100) if total > 0 else 0
-        
-        text = (
-            f"🌐 <b>API Details</b>\n\n"
-            f"<b>Name:</b> {api['name']}\n"
-            f"<b>URL:</b> <code>{api['url']}</code>\n"
-            f"<b>Status:</b> {'✅ Active' if api['status'] == 'active' else '❌ Inactive'}\n"
-            f"<b>Priority:</b> {api['priority']}\n"
-            f"<b>Success Rate:</b> {success_rate:.1f}% ({api.get('success_count', 0)}/{total})\n"
-            f"<b>Last Checked:</b> {api.get('last_checked', datetime.utcnow()).strftime('%Y-%m-%d %H:%M')}\n"
-            f"<b>Notes:</b> {api.get('notes', 'No notes')}\n"
-        )
-        
-        buttons = [
-            [{"text": "🔄 Test Now", "callback_data": f"test_api_{api_id}"}],
-            [{"text": "✏️ Edit Name", "callback_data": f"edit_api_name_{api_id}"}],
-            [{"text": "✏️ Edit URL", "callback_data": f"edit_api_url_{api_id}"}],
-            [{"text": "⬆️ Increase Priority", "callback_data": f"api_priority_up_{api_id}"}],
-            [{"text": "⬇️ Decrease Priority", "callback_data": f"api_priority_down_{api_id}"}],
-            [{"text": "🔄 Toggle Status", "callback_data": f"toggle_api_{api_id}"}],
-            [{"text": "🗑️ Delete API", "callback_data": f"delete_api_{api_id}"}],
-            [{"text": "🔙 Back to APIs", "callback_data": "list_apis"}]
-        ]
-        
-        send_telegram_with_keyboard(chat_id, text, buttons)
-        
-    except Exception as e:
-        send_telegram_message(chat_id, f"❌ Error: {str(e)}")
-
-def handle_add_api_start(chat_id, user_id):
-    """Start add API process"""
-    if not is_admin(user_id):
-        return
-    
-    set_user_state(user_id, "adding_api", {})
-    
-    text = (
-        "➕ <b>Add New API</b>\n\n"
-        "Please enter the following details:\n\n"
-        "1️⃣ <b>API Name</b> (e.g., My API 1)\n"
-        "Send /cancel to abort."
-    )
-    
-    send_telegram_message(chat_id, text)
-
-def handle_add_api_name(chat_id, user_id, name):
-    """Handle API name input"""
-    state, data = get_user_state(user_id)
-    
-    if state != "adding_api":
-        return
-    
-    data['name'] = name
-    set_user_state(user_id, "adding_api_url", data)
-    
-    text = (
-        "✅ Name saved!\n\n"
-        "2️⃣ <b>API URL</b>\n"
-        "Enter the API URL. Use <code>{{user_id}}</code> as placeholder.\n"
-        "Example: <code>https://api.example.com/search?userid={user_id}</code>"
-    )
-    
-    send_telegram_message(chat_id, text)
-
-def handle_add_api_url(chat_id, user_id, url):
-    """Handle API URL input"""
-    state, data = get_user_state(user_id)
-    
-    if state != "adding_api_url":
-        return
-    
-    data['url'] = url
-    set_user_state(user_id, "adding_api_priority", data)
-    
-    text = (
-        "✅ URL saved!\n\n"
-        "3️⃣ <b>Priority</b> (1-100)\n"
-        "Lower number = higher priority\n"
-        "(e.g., 1 for primary, 10 for backup)"
-    )
-    
-    send_telegram_message(chat_id, text)
-
-def handle_add_api_priority(chat_id, user_id, priority_str):
-    """Handle priority input and save API"""
-    state, data = get_user_state(user_id)
-    
-    if state != "adding_api_priority":
-        return
-    
-    try:
-        priority = int(priority_str)
-        
-        new_api = {
-            "name": data['name'],
-            "url": data['url'],
-            "method": "GET",
-            "status": "active",
-            "priority": priority,
-            "success_count": 0,
-            "fail_count": 0,
-            "last_checked": datetime.utcnow(),
-            "added_by": f"tg_{user_id}",
-            "notes": "Added via Telegram Bot",
-            "created_at": datetime.utcnow()
-        }
-        
-        result = apis_col.insert_one(new_api)
-        
-        text = (
-            f"✅ <b>API Added Successfully!</b>\n\n"
-            f"<b>Name:</b> {data['name']}\n"
-            f"<b>URL:</b> <code>{data['url']}</code>\n"
-            f"<b>Priority:</b> {priority}\n\n"
-            f"🔄 Testing API now..."
-        )
-        
-        send_telegram_message(chat_id, text)
-        
-        # Test the new API
-        test_result = test_api_health(new_api)
-        
-        if test_result['working']:
-            apis_col.update_one(
-                {"_id": result.inserted_id},
-                {"$set": {"status": "active", "notes": "Working - Added via bot"}}
-            )
-            send_telegram_message(
-                chat_id,
-                f"✅ API is working! Response time: {test_result['response_time']:.0f}ms"
-            )
-        else:
-            apis_col.update_one(
-                {"_id": result.inserted_id},
-                {"$set": {"status": "inactive", "notes": f"Not working: {test_result.get('error', 'Unknown')}"}}
-            )
-            send_telegram_message(
-                chat_id,
-                f"⚠️ API test failed: {test_result.get('error', 'Unknown')}\nAPI marked as inactive."
-            )
-        
-        clear_user_state(user_id)
-        
-        buttons = [
-            [{"text": "🌐 View All APIs", "callback_data": "list_apis"}],
-            [{"text": "➕ Add Another", "callback_data": "add_api"}]
-        ]
-        
-        send_telegram_with_keyboard(chat_id, "What would you like to do?", buttons)
-        
-    except ValueError:
-        send_telegram_message(chat_id, "❌ Invalid priority! Please enter a number:")
-
-def handle_test_api(chat_id, user_id, api_id):
-    """Test a specific API"""
-    if not is_admin(user_id):
-        return
-    
-    try:
-        api = apis_col.find_one({"_id": ObjectId(api_id)})
-        if not api:
-            send_telegram_message(chat_id, "❌ API not found!")
-            return
-        
-        send_telegram_message(chat_id, f"🔄 Testing API: {api['name']}...")
-        
-        test_result = test_api_health(api)
-        
-        if test_result['working']:
-            apis_col.update_one(
-                {"_id": ObjectId(api_id)},
-                {"$set": {
-                    "status": "active",
-                    "last_checked": datetime.utcnow(),
-                    "notes": f"Working - Response time: {test_result['response_time']:.0f}ms"
-                }}
-            )
-            text = (
-                f"✅ <b>API is WORKING!</b>\n\n"
-                f"Response Time: {test_result['response_time']:.0f}ms\n"
-                f"Status Code: {test_result['status_code']}"
-            )
-        else:
-            apis_col.update_one(
-                {"_id": ObjectId(api_id)},
-                {"$set": {
-                    "status": "inactive",
-                    "last_checked": datetime.utcnow(),
-                    "notes": f"Not working: {test_result.get('error', 'Unknown')}"
-                }}
-            )
-            text = (
-                f"❌ <b>API is NOT working!</b>\n\n"
-                f"Error: {test_result.get('error', 'Unknown')}"
-            )
-        
-        buttons = [
-            [{"text": "🔄 Test Again", "callback_data": f"test_api_{api_id}"}],
-            [{"text": "🔙 Back to API", "callback_data": f"view_api_{api_id}"}]
-        ]
-        
-        send_telegram_with_keyboard(chat_id, text, buttons)
-        
-    except Exception as e:
-        send_telegram_message(chat_id, f"❌ Error: {str(e)}")
-
-def handle_toggle_api(chat_id, user_id, api_id):
-    """Toggle API status"""
-    if not is_admin(user_id):
-        return
-    
-    try:
-        api = apis_col.find_one({"_id": ObjectId(api_id)})
-        if not api:
-            send_telegram_message(chat_id, "❌ API not found!")
-            return
-        
-        new_status = "inactive" if api['status'] == "active" else "active"
-        
-        apis_col.update_one(
-            {"_id": ObjectId(api_id)},
-            {"$set": {"status": new_status}}
-        )
-        
-        text = f"✅ API status changed to: {new_status}"
-        
-        buttons = [
-            [{"text": "🔙 Back to API", "callback_data": f"view_api_{api_id}"}]
-        ]
-        
-        send_telegram_with_keyboard(chat_id, text, buttons)
-        
-    except Exception as e:
-        send_telegram_message(chat_id, f"❌ Error: {str(e)}")
-
-def handle_delete_api(chat_id, user_id, api_id):
-    """Delete API confirmation"""
-    if not is_admin(user_id):
-        return
-    
-    try:
-        api = apis_col.find_one({"_id": ObjectId(api_id)})
-        if not api:
-            send_telegram_message(chat_id, "❌ API not found!")
-            return
-        
-        text = (
-            f"⚠️ <b>Delete API?</b>\n\n"
-            f"Name: {api['name']}\n"
-            f"URL: <code>{api['url']}</code>\n\n"
-            f"Are you sure you want to delete this API?"
-        )
-        
-        buttons = [
-            [{"text": "✅ Yes, Delete", "callback_data": f"confirm_delete_api_{api_id}"}],
-            [{"text": "❌ No, Cancel", "callback_data": f"view_api_{api_id}"}]
-        ]
-        
-        send_telegram_with_keyboard(chat_id, text, buttons)
-        
-    except Exception as e:
-        send_telegram_message(chat_id, f"❌ Error: {str(e)}")
-
-def handle_confirm_delete_api(chat_id, user_id, api_id):
-    """Confirm and delete API"""
-    if not is_admin(user_id):
-        return
-    
-    try:
-        api = apis_col.find_one({"_id": ObjectId(api_id)})
-        if api:
-            api_name = api['name']
-            apis_col.delete_one({"_id": ObjectId(api_id)})
-            text = f"✅ API '{api_name}' deleted successfully!"
-        else:
-            text = "❌ API not found!"
-        
-        buttons = [
-            [{"text": "🌐 View All APIs", "callback_data": "list_apis"}],
-            [{"text": "🔙 Main Menu", "callback_data": "main_menu"}]
-        ]
-        
-        send_telegram_with_keyboard(chat_id, text, buttons)
-        
-    except Exception as e:
-        send_telegram_message(chat_id, f"❌ Error: {str(e)}")
-
-def handle_api_priority(chat_id, user_id, api_id, direction):
-    """Increase or decrease API priority"""
-    if not is_admin(user_id):
-        return
-    
-    try:
-        api = apis_col.find_one({"_id": ObjectId(api_id)})
-        if not api:
-            send_telegram_message(chat_id, "❌ API not found!")
-            return
-        
-        current_priority = api.get('priority', 10)
-        new_priority = current_priority - 1 if direction == "up" else current_priority + 1
-        
-        if new_priority < 1:
-            new_priority = 1
-        if new_priority > 100:
-            new_priority = 100
-        
-        apis_col.update_one(
-            {"_id": ObjectId(api_id)},
-            {"$set": {"priority": new_priority}}
-        )
-        
-        text = f"✅ Priority changed from {current_priority} to {new_priority}"
-        
-        buttons = [
-            [{"text": "🔙 Back to API", "callback_data": f"view_api_{api_id}"}]
-        ]
-        
-        send_telegram_with_keyboard(chat_id, text, buttons)
-        
-    except Exception as e:
-        send_telegram_message(chat_id, f"❌ Error: {str(e)}")
-
-def handle_test_all_apis(chat_id, user_id):
-    """Test all APIs"""
-    if not is_admin(user_id):
-        return
-    
-    send_telegram_message(chat_id, "🔄 Testing all APIs. This may take a moment...")
-    
-    apis = list(apis_col.find())
-    results = []
-    
-    for api in apis:
-        test_result = test_api_health(api)
-        
-        if test_result['working']:
-            apis_col.update_one(
-                {"_id": api['_id']},
-                {"$set": {
-                    "status": "active",
-                    "last_checked": datetime.utcnow()
-                }}
-            )
-            results.append(f"✅ {api['name']}: Working ({test_result['response_time']:.0f}ms)")
-        else:
-            apis_col.update_one(
-                {"_id": api['_id']},
-                {"$set": {
-                    "status": "inactive",
-                    "last_checked": datetime.utcnow()
-                }}
-            )
-            results.append(f"❌ {api['name']}: Failed - {test_result.get('error', 'Unknown')}")
-    
-    text = "📊 <b>API Test Results</b>\n\n" + "\n".join(results)
-    
-    buttons = [
-        [{"text": "🔄 Test Again", "callback_data": "test_all_apis"}],
-        [{"text": "🌐 View APIs", "callback_data": "list_apis"}]
-    ]
-    
-    send_telegram_with_keyboard(chat_id, text, buttons)
-
 def handle_stats(chat_id, user_id):
-    """Handle /stats command"""
     if not is_admin(user_id):
         return
     
@@ -819,7 +431,6 @@ def handle_stats(chat_id, user_id):
     today_searches = api_logs_col.count_documents({"timestamp": {"$gte": today}})
     total_searches = api_logs_col.count_documents({})
     
-    # API stats
     total_apis = apis_col.count_documents({})
     active_apis = apis_col.count_documents({"status": "active"})
     
@@ -851,7 +462,6 @@ def handle_stats(chat_id, user_id):
     send_telegram_with_keyboard(chat_id, text, buttons)
 
 def handle_list_keys(chat_id, user_id, page=1):
-    """Handle /keys command - List all keys with pagination"""
     if not is_admin(user_id):
         return
     
@@ -867,7 +477,6 @@ def handle_list_keys(chat_id, user_id, page=1):
         return
     
     text = f"🔑 <b>API Keys (Page {page}/{total_pages})</b>\n\n"
-    
     buttons = []
     
     for idx, key in enumerate(keys, 1):
@@ -900,7 +509,6 @@ def handle_list_keys(chat_id, user_id, page=1):
     send_telegram_with_keyboard(chat_id, text, buttons)
 
 def handle_view_key(chat_id, user_id, key_id):
-    """View single key details"""
     if not is_admin(user_id):
         return
     
@@ -949,44 +557,24 @@ def handle_view_key(chat_id, user_id, key_id):
         send_telegram_message(chat_id, f"❌ Error: {str(e)}")
 
 def handle_create_key_start(chat_id, user_id):
-    """Start create key process"""
     if not is_admin(user_id):
         return
     
     set_user_state(user_id, "creating_key", {})
-    
-    text = (
-        "➕ <b>Create New API Key</b>\n\n"
-        "Please enter the following details:\n\n"
-        "1️⃣ <b>Owner Name</b> (e.g., @VIP_X_OFFICIAL)\n"
-        "Send /cancel to abort."
-    )
-    
+    text = "➕ <b>Create New API Key</b>\n\nPlease enter owner name (e.g., @VIP_X_OFFICIAL):\nSend /cancel to abort."
     send_telegram_message(chat_id, text)
 
 def handle_create_key_owner(chat_id, user_id, owner_name):
-    """Handle owner name input"""
     state, data = get_user_state(user_id)
-    
     if state != "creating_key":
         return
     
     data['owner_name'] = owner_name
     set_user_state(user_id, "creating_key_expiry", data)
-    
-    text = (
-        "✅ Owner name saved!\n\n"
-        "2️⃣ <b>Expiry Days</b>\n"
-        "How many days should this key last?\n"
-        "(e.g., 30, 60, 90, 365)"
-    )
-    
-    send_telegram_message(chat_id, text)
+    send_telegram_message(chat_id, "✅ Owner saved!\n\nEnter expiry days (e.g., 30):")
 
 def handle_create_key_expiry(chat_id, user_id, expiry_days_str):
-    """Handle expiry days input"""
     state, data = get_user_state(user_id)
-    
     if state != "creating_key_expiry":
         return
     
@@ -997,23 +585,13 @@ def handle_create_key_expiry(chat_id, user_id, expiry_days_str):
         
         data['expiry_days'] = expiry_days
         set_user_state(user_id, "creating_key_limit", data)
-        
-        text = (
-            f"✅ Expiry set to {expiry_days} days!\n\n"
-            "3️⃣ <b>Daily Search Limit</b>\n"
-            "How many searches per day?\n"
-            "(e.g., 100, 500, 1000, 999999 for unlimited)"
-        )
-        
-        send_telegram_message(chat_id, text)
+        send_telegram_message(chat_id, f"✅ Expiry set to {expiry_days} days!\n\nEnter daily limit (e.g., 100):")
         
     except ValueError:
         send_telegram_message(chat_id, "❌ Invalid number! Please enter a valid number:")
 
 def handle_create_key_limit(chat_id, user_id, limit_str):
-    """Handle daily limit input and create key"""
     state, data = get_user_state(user_id)
-    
     if state != "creating_key_limit":
         return
     
@@ -1032,7 +610,7 @@ def handle_create_key_limit(chat_id, user_id, limit_str):
             "expires_on": expires_on,
             "daily_limit": daily_limit,
             "is_active": True,
-            "notes": f"Created via Telegram Bot",
+            "notes": "Created via Telegram Bot",
             "created_by": f"tg_{user_id}"
         }
         
@@ -1043,8 +621,7 @@ def handle_create_key_limit(chat_id, user_id, limit_str):
             f"<b>Key:</b> <code>{key_value}</code>\n"
             f"<b>Owner:</b> {data['owner_name']}\n"
             f"<b>Expires:</b> {expires_on.strftime('%Y-%m-%d')}\n"
-            f"<b>Daily Limit:</b> {daily_limit}/day\n\n"
-            f"📋 Copy your key: <code>{key_value}</code>"
+            f"<b>Daily Limit:</b> {daily_limit}/day"
         )
         
         buttons = [
@@ -1059,8 +636,386 @@ def handle_create_key_limit(chat_id, user_id, limit_str):
     except ValueError:
         send_telegram_message(chat_id, "❌ Invalid number! Please enter a valid number:")
 
+def handle_list_apis(chat_id, user_id):
+    if not is_admin(user_id):
+        return
+    
+    apis = list(apis_col.find().sort("priority", 1))
+    
+    if not apis:
+        send_telegram_message(chat_id, "❌ No APIs configured!")
+        return
+    
+    text = "🌐 <b>Configured APIs</b>\n\n"
+    buttons = []
+    
+    for api in apis:
+        status_emoji = "✅" if api['status'] == "active" else "❌"
+        text += f"{status_emoji} <b>{api['name']}</b> (Priority: {api['priority']})\n"
+        buttons.append([{"text": f"🔧 Manage {api['name']}", "callback_data": f"view_api_{api['_id']}"}])
+    
+    buttons.append([{"text": "➕ Add New API", "callback_data": "add_api"}])
+    buttons.append([{"text": "🔄 Test All APIs", "callback_data": "test_all_apis"}])
+    buttons.append([{"text": "🔙 Main Menu", "callback_data": "main_menu"}])
+    
+    send_telegram_with_keyboard(chat_id, text, buttons)
+
+def handle_view_api(chat_id, user_id, api_id):
+    if not is_admin(user_id):
+        return
+    
+    try:
+        api = apis_col.find_one({"_id": ObjectId(api_id)})
+        if not api:
+            send_telegram_message(chat_id, "❌ API not found!")
+            return
+        
+        text = (
+            f"🌐 <b>API Details</b>\n\n"
+            f"<b>Name:</b> {api['name']}\n"
+            f"<b>URL:</b> <code>{api['url']}</code>\n"
+            f"<b>Status:</b> {'✅ Active' if api['status'] == 'active' else '❌ Inactive'}\n"
+            f"<b>Priority:</b> {api['priority']}\n"
+        )
+        
+        buttons = [
+            [{"text": "🔄 Test Now", "callback_data": f"test_api_{api_id}"}],
+            [{"text": "⬆️ Increase Priority", "callback_data": f"api_priority_up_{api_id}"}],
+            [{"text": "⬇️ Decrease Priority", "callback_data": f"api_priority_down_{api_id}"}],
+            [{"text": "🔄 Toggle Status", "callback_data": f"toggle_api_{api_id}"}],
+            [{"text": "🗑️ Delete API", "callback_data": f"delete_api_{api_id}"}],
+            [{"text": "🔙 Back to APIs", "callback_data": "list_apis"}]
+        ]
+        
+        send_telegram_with_keyboard(chat_id, text, buttons)
+        
+    except Exception as e:
+        send_telegram_message(chat_id, f"❌ Error: {str(e)}")
+
+def handle_add_api_start(chat_id, user_id):
+    if not is_admin(user_id):
+        return
+    
+    set_user_state(user_id, "adding_api", {})
+    text = "➕ <b>Add New API</b>\n\nEnter API name:"
+    send_telegram_message(chat_id, text)
+
+def handle_add_api_name(chat_id, user_id, name):
+    state, data = get_user_state(user_id)
+    if state != "adding_api":
+        return
+    
+    data['name'] = name
+    set_user_state(user_id, "adding_api_url", data)
+    send_telegram_message(chat_id, "✅ Name saved!\n\nEnter API URL (use {user_id} as placeholder):")
+
+def handle_add_api_url(chat_id, user_id, url):
+    state, data = get_user_state(user_id)
+    if state != "adding_api_url":
+        return
+    
+    data['url'] = url
+    set_user_state(user_id, "adding_api_priority", data)
+    send_telegram_message(chat_id, "✅ URL saved!\n\nEnter priority (1-100, lower = higher priority):")
+
+def handle_add_api_priority(chat_id, user_id, priority_str):
+    state, data = get_user_state(user_id)
+    if state != "adding_api_priority":
+        return
+    
+    try:
+        priority = int(priority_str)
+        
+        new_api = {
+            "name": data['name'],
+            "url": data['url'],
+            "method": "GET",
+            "status": "active",
+            "priority": priority,
+            "success_count": 0,
+            "fail_count": 0,
+            "last_checked": datetime.utcnow(),
+            "added_by": f"tg_{user_id}",
+            "notes": "Added via Telegram Bot",
+            "created_at": datetime.utcnow()
+        }
+        
+        apis_col.insert_one(new_api)
+        
+        text = f"✅ <b>API Added Successfully!</b>\n\nName: {data['name']}\nPriority: {priority}"
+        
+        buttons = [
+            [{"text": "🌐 View All APIs", "callback_data": "list_apis"}],
+            [{"text": "➕ Add Another", "callback_data": "add_api"}]
+        ]
+        
+        send_telegram_with_keyboard(chat_id, text, buttons)
+        clear_user_state(user_id)
+        
+    except ValueError:
+        send_telegram_message(chat_id, "❌ Invalid priority! Please enter a number:")
+
+def handle_test_api(chat_id, user_id, api_id):
+    if not is_admin(user_id):
+        return
+    
+    try:
+        api = apis_col.find_one({"_id": ObjectId(api_id)})
+        if not api:
+            send_telegram_message(chat_id, "❌ API not found!")
+            return
+        
+        send_telegram_message(chat_id, f"🔄 Testing API: {api['name']}...")
+        
+        test_result = test_api_health(api)
+        
+        if test_result['working']:
+            apis_col.update_one(
+                {"_id": ObjectId(api_id)},
+                {"$set": {"status": "active", "last_checked": datetime.utcnow()}}
+            )
+            text = f"✅ <b>API is WORKING!</b>\n\nResponse Time: {test_result['response_time']:.0f}ms"
+        else:
+            apis_col.update_one(
+                {"_id": ObjectId(api_id)},
+                {"$set": {"status": "inactive", "last_checked": datetime.utcnow()}}
+            )
+            text = f"❌ <b>API is NOT working!</b>\n\nError: {test_result.get('error', 'Unknown')}"
+        
+        buttons = [
+            [{"text": "🔄 Test Again", "callback_data": f"test_api_{api_id}"}],
+            [{"text": "🔙 Back to API", "callback_data": f"view_api_{api_id}"}]
+        ]
+        
+        send_telegram_with_keyboard(chat_id, text, buttons)
+        
+    except Exception as e:
+        send_telegram_message(chat_id, f"❌ Error: {str(e)}")
+
+def handle_toggle_api(chat_id, user_id, api_id):
+    if not is_admin(user_id):
+        return
+    
+    try:
+        api = apis_col.find_one({"_id": ObjectId(api_id)})
+        if not api:
+            send_telegram_message(chat_id, "❌ API not found!")
+            return
+        
+        new_status = "inactive" if api['status'] == "active" else "active"
+        apis_col.update_one({"_id": ObjectId(api_id)}, {"$set": {"status": new_status}})
+        
+        send_telegram_message(chat_id, f"✅ API status changed to: {new_status}")
+        
+    except Exception as e:
+        send_telegram_message(chat_id, f"❌ Error: {str(e)}")
+
+def handle_delete_api(chat_id, user_id, api_id):
+    if not is_admin(user_id):
+        return
+    
+    try:
+        api = apis_col.find_one({"_id": ObjectId(api_id)})
+        if not api:
+            send_telegram_message(chat_id, "❌ API not found!")
+            return
+        
+        text = f"⚠️ <b>Delete API?</b>\n\nName: {api['name']}\n\nAre you sure?"
+        
+        buttons = [
+            [{"text": "✅ Yes, Delete", "callback_data": f"confirm_delete_api_{api_id}"}],
+            [{"text": "❌ No, Cancel", "callback_data": f"view_api_{api_id}"}]
+        ]
+        
+        send_telegram_with_keyboard(chat_id, text, buttons)
+        
+    except Exception as e:
+        send_telegram_message(chat_id, f"❌ Error: {str(e)}")
+
+def handle_confirm_delete_api(chat_id, user_id, api_id):
+    if not is_admin(user_id):
+        return
+    
+    try:
+        api = apis_col.find_one({"_id": ObjectId(api_id)})
+        if api:
+            api_name = api['name']
+            apis_col.delete_one({"_id": ObjectId(api_id)})
+            text = f"✅ API '{api_name}' deleted successfully!"
+        else:
+            text = "❌ API not found!"
+        
+        buttons = [
+            [{"text": "🌐 View All APIs", "callback_data": "list_apis"}],
+            [{"text": "🔙 Main Menu", "callback_data": "main_menu"}]
+        ]
+        
+        send_telegram_with_keyboard(chat_id, text, buttons)
+        
+    except Exception as e:
+        send_telegram_message(chat_id, f"❌ Error: {str(e)}")
+
+def handle_api_priority(chat_id, user_id, api_id, direction):
+    if not is_admin(user_id):
+        return
+    
+    try:
+        api = apis_col.find_one({"_id": ObjectId(api_id)})
+        if not api:
+            send_telegram_message(chat_id, "❌ API not found!")
+            return
+        
+        current = api.get('priority', 10)
+        new = current - 1 if direction == "up" else current + 1
+        
+        if new < 1:
+            new = 1
+        if new > 100:
+            new = 100
+        
+        apis_col.update_one({"_id": ObjectId(api_id)}, {"$set": {"priority": new}})
+        
+        send_telegram_message(chat_id, f"✅ Priority changed from {current} to {new}")
+        
+    except Exception as e:
+        send_telegram_message(chat_id, f"❌ Error: {str(e)}")
+
+def handle_test_all_apis(chat_id, user_id):
+    if not is_admin(user_id):
+        return
+    
+    send_telegram_message(chat_id, "🔄 Testing all APIs...")
+    
+    apis = list(apis_col.find())
+    results = []
+    
+    for api in apis:
+        test_result = test_api_health(api)
+        status = "✅" if test_result['working'] else "❌"
+        results.append(f"{status} {api['name']}")
+        
+        apis_col.update_one(
+            {"_id": api['_id']},
+            {"$set": {"status": "active" if test_result['working'] else "inactive", "last_checked": datetime.utcnow()}}
+        )
+    
+    text = "📊 <b>API Test Results</b>\n\n" + "\n".join(results)
+    
+    buttons = [
+        [{"text": "🔄 Test Again", "callback_data": "test_all_apis"}],
+        [{"text": "🌐 View APIs", "callback_data": "list_apis"}]
+    ]
+    
+    send_telegram_with_keyboard(chat_id, text, buttons)
+
+def handle_all_logs(chat_id, user_id):
+    if not is_admin(user_id):
+        return
+    
+    logs = list(api_logs_col.find().sort("timestamp", -1).limit(10))
+    
+    if not logs:
+        text = "📋 No logs found!"
+    else:
+        text = "📋 <b>Recent API Logs</b>\n\n"
+        for log in logs:
+            time_str = log['timestamp'].strftime('%H:%M')
+            text += f"🕒 {time_str} - Key: {log['key'][:4]}... - User: {log['user_id']}\n"
+    
+    buttons = [
+        [{"text": "🔄 Refresh", "callback_data": "logs"}],
+        [{"text": "🔙 Main Menu", "callback_data": "main_menu"}]
+    ]
+    
+    send_telegram_with_keyboard(chat_id, text, buttons)
+
+def handle_help(chat_id, user_id):
+    if not is_admin(user_id):
+        return
+    
+    text = (
+        "🤖 <b>Bot Commands</b>\n\n"
+        "/start - Main menu\n"
+        "/stats - Statistics\n"
+        "/keys - Manage keys\n"
+        "/createkey - Create key\n"
+        "/apis - Manage APIs\n"
+        "/logs - View logs\n"
+        "/settings - Settings\n"
+        "/help - This help"
+    )
+    
+    buttons = [[{"text": "🔙 Main Menu", "callback_data": "main_menu"}]]
+    send_telegram_with_keyboard(chat_id, text, buttons)
+
+def handle_settings(chat_id, user_id):
+    if not is_admin(user_id):
+        return
+    
+    settings = settings_col.find_one({"type": "admin_settings"}) or {}
+    
+    text = (
+        "⚙️ <b>Settings</b>\n\n"
+        f"👑 Owner: {settings.get('owner_display', '@VIP_X_OFFICIAL')}\n"
+        f"📢 Channel: {settings.get('channel', 'https://t.me/WebBot_Lab')}"
+    )
+    
+    buttons = [
+        [{"text": "✏️ Edit Owner", "callback_data": "edit_owner"}],
+        [{"text": "✏️ Edit Channel", "callback_data": "edit_channel"}],
+        [{"text": "🔙 Main Menu", "callback_data": "main_menu"}]
+    ]
+    
+    send_telegram_with_keyboard(chat_id, text, buttons)
+
+def handle_edit_owner_start(chat_id, user_id):
+    set_user_state(user_id, "editing_owner", {})
+    send_telegram_message(chat_id, "📝 Send new owner name:")
+
+def handle_edit_owner(chat_id, user_id, owner_name):
+    state, data = get_user_state(user_id)
+    if state != "editing_owner":
+        return
+    
+    settings_col.update_one(
+        {"type": "admin_settings"},
+        {"$set": {"owner_display": owner_name}},
+        upsert=True
+    )
+    
+    send_telegram_message(chat_id, f"✅ Owner updated to: {owner_name}")
+    clear_user_state(user_id)
+
+def handle_edit_channel_start(chat_id, user_id):
+    set_user_state(user_id, "editing_channel", {})
+    send_telegram_message(chat_id, "📝 Send new channel URL:")
+
+def handle_edit_channel(chat_id, user_id, channel):
+    state, data = get_user_state(user_id)
+    if state != "editing_channel":
+        return
+    
+    settings_col.update_one(
+        {"type": "admin_settings"},
+        {"$set": {"channel": channel}},
+        upsert=True
+    )
+    
+    send_telegram_message(chat_id, f"✅ Channel updated to: {channel}")
+    clear_user_state(user_id)
+
+def handle_cancel(chat_id, user_id):
+    state, data = get_user_state(user_id)
+    if state:
+        clear_user_state(user_id)
+        text = "✅ Operation cancelled."
+    else:
+        text = "❌ No active operation."
+    
+    buttons = [[{"text": "🔙 Main Menu", "callback_data": "main_menu"}]]
+    send_telegram_with_keyboard(chat_id, text, buttons)
+
 def handle_extend_key(chat_id, user_id, key_id):
-    """Start extend key process"""
     if not is_admin(user_id):
         return
     
@@ -1071,22 +1026,12 @@ def handle_extend_key(chat_id, user_id, key_id):
             return
         
         set_user_state(user_id, f"extending_key_{key_id}", {})
-        
-        text = (
-            f"⏱️ <b>Extend Key Expiry</b>\n\n"
-            f"Key: <code>{key['key']}</code>\n"
-            f"Current Expiry: {key['expires_on'].strftime('%Y-%m-%d')}\n\n"
-            f"Send number of days to extend (e.g., 30):\n"
-            f"Send /cancel to abort."
-        )
-        
-        send_telegram_message(chat_id, text)
+        send_telegram_message(chat_id, f"⏱️ Enter days to extend:")
         
     except Exception as e:
         send_telegram_message(chat_id, f"❌ Error: {str(e)}")
 
 def handle_extend_key_days(chat_id, user_id, key_id, days_str):
-    """Handle extend days input"""
     try:
         days = int(days_str)
         if days <= 0:
@@ -1099,32 +1044,15 @@ def handle_extend_key_days(chat_id, user_id, key_id, days_str):
             return
         
         new_expiry = key['expires_on'] + timedelta(days=days)
+        keys_col.update_one({"_id": ObjectId(key_id)}, {"$set": {"expires_on": new_expiry}})
         
-        keys_col.update_one(
-            {"_id": ObjectId(key_id)},
-            {"$set": {"expires_on": new_expiry}}
-        )
-        
-        text = (
-            f"✅ <b>Key Extended Successfully!</b>\n\n"
-            f"Key: <code>{key['key']}</code>\n"
-            f"New Expiry: {new_expiry.strftime('%Y-%m-%d')}\n"
-            f"Extended by: {days} days"
-        )
-        
-        buttons = [
-            [{"text": "🔑 View Key", "callback_data": f"view_key_{key_id}"}],
-            [{"text": "🔙 Back to Keys", "callback_data": "list_keys"}]
-        ]
-        
-        send_telegram_with_keyboard(chat_id, text, buttons)
+        send_telegram_message(chat_id, f"✅ Key extended by {days} days!")
         clear_user_state(user_id)
         
     except ValueError:
-        send_telegram_message(chat_id, "❌ Invalid number! Please enter a valid number:")
+        send_telegram_message(chat_id, "❌ Invalid number!")
 
 def handle_delete_key(chat_id, user_id, key_id):
-    """Delete key confirmation"""
     if not is_admin(user_id):
         return
     
@@ -1134,17 +1062,10 @@ def handle_delete_key(chat_id, user_id, key_id):
             send_telegram_message(chat_id, "❌ Key not found!")
             return
         
-        text = (
-            f"⚠️ <b>Delete Key?</b>\n\n"
-            f"Key: <code>{key['key']}</code>\n"
-            f"Owner: {key.get('owner_name', '@VIP_X_OFFICIAL')}\n\n"
-            f"Are you sure you want to delete this key?\n"
-            f"This action cannot be undone!"
-        )
-        
+        text = f"⚠️ Delete key <code>{key['key']}</code>?"
         buttons = [
-            [{"text": "✅ Yes, Delete", "callback_data": f"confirm_delete_{key_id}"}],
-            [{"text": "❌ No, Cancel", "callback_data": f"view_key_{key_id}"}]
+            [{"text": "✅ Yes", "callback_data": f"confirm_delete_{key_id}"}],
+            [{"text": "❌ No", "callback_data": f"view_key_{key_id}"}]
         ]
         
         send_telegram_with_keyboard(chat_id, text, buttons)
@@ -1153,33 +1074,25 @@ def handle_delete_key(chat_id, user_id, key_id):
         send_telegram_message(chat_id, f"❌ Error: {str(e)}")
 
 def handle_confirm_delete(chat_id, user_id, key_id):
-    """Confirm and delete key"""
     if not is_admin(user_id):
         return
     
     try:
         key = keys_col.find_one({"_id": ObjectId(key_id)})
         if key:
-            key_value = key['key']
             keys_col.delete_one({"_id": ObjectId(key_id)})
-            api_logs_col.delete_many({"key": key_value})
-            
-            text = f"✅ Key <code>{key_value}</code> deleted successfully!"
+            api_logs_col.delete_many({"key": key['key']})
+            text = f"✅ Key deleted!"
         else:
             text = "❌ Key not found!"
         
-        buttons = [
-            [{"text": "🔑 View All Keys", "callback_data": "list_keys"}],
-            [{"text": "🔙 Main Menu", "callback_data": "main_menu"}]
-        ]
-        
+        buttons = [[{"text": "🔑 View Keys", "callback_data": "list_keys"}]]
         send_telegram_with_keyboard(chat_id, text, buttons)
         
     except Exception as e:
         send_telegram_message(chat_id, f"❌ Error: {str(e)}")
 
 def handle_key_logs(chat_id, user_id, key_id):
-    """View logs for specific key"""
     if not is_admin(user_id):
         return
     
@@ -1189,263 +1102,20 @@ def handle_key_logs(chat_id, user_id, key_id):
             send_telegram_message(chat_id, "❌ Key not found!")
             return
         
-        logs = list(api_logs_col.find({"key": key['key']})
-                    .sort("timestamp", -1)
-                    .limit(10))
+        logs = list(api_logs_col.find({"key": key['key']}).sort("timestamp", -1).limit(5))
         
         if not logs:
-            text = f"📋 No logs found for key <code>{key['key']}</code>"
+            text = f"📋 No logs for key {key['key']}"
         else:
-            text = f"📋 <b>Recent Logs for {key['key']}</b>\n\n"
-            
+            text = f"📋 <b>Logs for {key['key']}</b>\n\n"
             for log in logs:
-                time_str = log['timestamp'].strftime('%Y-%m-%d %H:%M')
-                text += f"🕒 {time_str} - User: {log['user_id']}\n"
+                text += f"🕒 {log['timestamp'].strftime('%H:%M')} - User: {log['user_id']}\n"
         
-        buttons = [
-            [{"text": "🔑 View Key", "callback_data": f"view_key_{key_id}"}],
-            [{"text": "🔙 Back to Keys", "callback_data": "list_keys"}]
-        ]
-        
+        buttons = [[{"text": "🔙 Back", "callback_data": f"view_key_{key_id}"}]]
         send_telegram_with_keyboard(chat_id, text, buttons)
         
     except Exception as e:
         send_telegram_message(chat_id, f"❌ Error: {str(e)}")
-
-def handle_all_logs(chat_id, user_id):
-    """View all recent logs"""
-    if not is_admin(user_id):
-        return
-    
-    logs = list(api_logs_col.find().sort("timestamp", -1).limit(10))
-    
-    if not logs:
-        text = "📋 No logs found!"
-    else:
-        text = "📋 <b>Recent API Logs (Last 10)</b>\n\n"
-        
-        for log in logs:
-            time_str = log['timestamp'].strftime('%Y-%m-%d %H:%M')
-            text += f"🕒 {time_str}\n"
-            text += f"├ Key: <code>{log['key'][:8]}...</code>\n"
-            text += f"├ User: {log['user_id']}\n"
-            text += f"└ IP: {log['ip_address']}\n\n"
-    
-    buttons = [
-        [{"text": "🔄 Refresh", "callback_data": "logs"}],
-        [{"text": "🔙 Main Menu", "callback_data": "main_menu"}]
-    ]
-    
-    send_telegram_with_keyboard(chat_id, text, buttons)
-
-def handle_settings(chat_id, user_id):
-    """View and edit settings"""
-    if not is_admin(user_id):
-        return
-    
-    settings = settings_col.find_one({"type": "admin_settings"}) or {}
-    
-    text = (
-        "⚙️ <b>Bot Settings</b>\n\n"
-        f"👑 <b>Owner:</b> {settings.get('owner_display', '@VIP_X_OFFICIAL')}\n"
-        f"📢 <b>Channel:</b> {settings.get('channel', 'https://t.me/WebBot_Lab')}\n"
-        f"📊 <b>Default Daily Limit:</b> {settings.get('default_daily_limit', 100)}\n"
-        f"⏱️ <b>Default Expiry:</b> {settings.get('default_expiry_days', 30)} days\n"
-    )
-    
-    buttons = [
-        [{"text": "✏️ Edit Owner", "callback_data": "edit_owner"}],
-        [{"text": "✏️ Edit Channel", "callback_data": "edit_channel"}],
-        [{"text": "✏️ Edit Default Limit", "callback_data": "edit_default_limit"}],
-        [{"text": "✏️ Edit Default Expiry", "callback_data": "edit_default_expiry"}],
-        [{"text": "🔙 Main Menu", "callback_data": "main_menu"}]
-    ]
-    
-    send_telegram_with_keyboard(chat_id, text, buttons)
-
-def handle_edit_owner_start(chat_id, user_id):
-    """Start edit owner process"""
-    if not is_admin(user_id):
-        return
-    
-    set_user_state(user_id, "editing_owner", {})
-    send_telegram_message(chat_id, "📝 Send new owner name (e.g., @VIP_X_OFFICIAL):")
-
-def handle_edit_owner(chat_id, user_id, owner_name):
-    """Handle owner edit"""
-    state, data = get_user_state(user_id)
-    
-    if state != "editing_owner":
-        return
-    
-    settings_col.update_one(
-        {"type": "admin_settings"},
-        {"$set": {"owner_display": owner_name}},
-        upsert=True
-    )
-    
-    text = f"✅ Owner name updated to: {owner_name}"
-    
-    buttons = [
-        [{"text": "⚙️ Back to Settings", "callback_data": "settings"}],
-        [{"text": "🔙 Main Menu", "callback_data": "main_menu"}]
-    ]
-    
-    send_telegram_with_keyboard(chat_id, text, buttons)
-    clear_user_state(user_id)
-
-def handle_edit_channel_start(chat_id, user_id):
-    """Start edit channel process"""
-    if not is_admin(user_id):
-        return
-    
-    set_user_state(user_id, "editing_channel", {})
-    send_telegram_message(chat_id, "📝 Send new channel URL:")
-
-def handle_edit_channel(chat_id, user_id, channel):
-    """Handle channel edit"""
-    state, data = get_user_state(user_id)
-    
-    if state != "editing_channel":
-        return
-    
-    settings_col.update_one(
-        {"type": "admin_settings"},
-        {"$set": {"channel": channel}},
-        upsert=True
-    )
-    
-    text = f"✅ Channel updated to: {channel}"
-    
-    buttons = [
-        [{"text": "⚙️ Back to Settings", "callback_data": "settings"}],
-        [{"text": "🔙 Main Menu", "callback_data": "main_menu"}]
-    ]
-    
-    send_telegram_with_keyboard(chat_id, text, buttons)
-    clear_user_state(user_id)
-
-def handle_edit_default_limit_start(chat_id, user_id):
-    """Start edit default limit process"""
-    if not is_admin(user_id):
-        return
-    
-    set_user_state(user_id, "editing_default_limit", {})
-    send_telegram_message(chat_id, "📝 Send new default daily limit (e.g., 100):")
-
-def handle_edit_default_limit(chat_id, user_id, limit_str):
-    """Handle default limit edit"""
-    state, data = get_user_state(user_id)
-    
-    if state != "editing_default_limit":
-        return
-    
-    try:
-        limit = int(limit_str)
-        if limit <= 0:
-            raise ValueError
-        
-        settings_col.update_one(
-            {"type": "admin_settings"},
-            {"$set": {"default_daily_limit": limit}},
-            upsert=True
-        )
-        
-        text = f"✅ Default daily limit updated to: {limit}"
-        
-        buttons = [
-            [{"text": "⚙️ Back to Settings", "callback_data": "settings"}],
-            [{"text": "🔙 Main Menu", "callback_data": "main_menu"}]
-        ]
-        
-        send_telegram_with_keyboard(chat_id, text, buttons)
-        clear_user_state(user_id)
-        
-    except ValueError:
-        send_telegram_message(chat_id, "❌ Invalid number! Please enter a valid number:")
-
-def handle_edit_default_expiry_start(chat_id, user_id):
-    """Start edit default expiry process"""
-    if not is_admin(user_id):
-        return
-    
-    set_user_state(user_id, "editing_default_expiry", {})
-    send_telegram_message(chat_id, "📝 Send new default expiry days (e.g., 30):")
-
-def handle_edit_default_expiry(chat_id, user_id, days_str):
-    """Handle default expiry edit"""
-    state, data = get_user_state(user_id)
-    
-    if state != "editing_default_expiry":
-        return
-    
-    try:
-        days = int(days_str)
-        if days <= 0:
-            raise ValueError
-        
-        settings_col.update_one(
-            {"type": "admin_settings"},
-            {"$set": {"default_expiry_days": days}},
-            upsert=True
-        )
-        
-        text = f"✅ Default expiry days updated to: {days}"
-        
-        buttons = [
-            [{"text": "⚙️ Back to Settings", "callback_data": "settings"}],
-            [{"text": "🔙 Main Menu", "callback_data": "main_menu"}]
-        ]
-        
-        send_telegram_with_keyboard(chat_id, text, buttons)
-        clear_user_state(user_id)
-        
-    except ValueError:
-        send_telegram_message(chat_id, "❌ Invalid number! Please enter a valid number:")
-
-def handle_help(chat_id, user_id):
-    """Handle /help command"""
-    if not is_admin(user_id):
-        return
-    
-    text = (
-        "🤖 <b>Bot Commands</b>\n\n"
-        "<b>Basic Commands:</b>\n"
-        "/start - Show main menu\n"
-        "/stats - View API statistics\n"
-        "/keys - List all API keys\n"
-        "/createkey - Create new key\n"
-        "/apis - Manage source APIs\n"
-        "/logs - View recent logs\n"
-        "/settings - Bot settings\n"
-        "/help - Show this help\n\n"
-        "<b>Navigation:</b>\n"
-        "• Use buttons to navigate\n"
-        "• Click on keys to manage them\n"
-        "• Use /cancel to cancel any operation"
-    )
-    
-    buttons = [
-        [{"text": "🔙 Main Menu", "callback_data": "main_menu"}]
-    ]
-    
-    send_telegram_with_keyboard(chat_id, text, buttons)
-
-def handle_cancel(chat_id, user_id):
-    """Handle /cancel command"""
-    state, data = get_user_state(user_id)
-    
-    if state:
-        clear_user_state(user_id)
-        text = "✅ Operation cancelled. Use /start for main menu."
-    else:
-        text = "❌ No active operation to cancel."
-    
-    buttons = [
-        [{"text": "🔙 Main Menu", "callback_data": "main_menu"}]
-    ]
-    
-    send_telegram_with_keyboard(chat_id, text, buttons)
 
 # ==================== PUBLIC ROUTES ====================
 
@@ -1520,22 +1190,10 @@ def home():
             </div>
             
             <div class="features">
-                <div class="feature">
-                    <h4>🔑 Key Management</h4>
-                    <p>Create and manage API keys with custom expiry</p>
-                </div>
-                <div class="feature">
-                    <h4>⚡ Rate Limiting</h4>
-                    <p>Set daily search limits per key</p>
-                </div>
-                <div class="feature">
-                    <h4>👑 Owner</h4>
-                    <p>@VIP_X_OFFICIAL</p>
-                </div>
-                <div class="feature">
-                    <h4>🤖 Telegram Bot</h4>
-                    <p>Full admin control via Telegram</p>
-                </div>
+                <div class="feature"><h4>🔑 Key Management</h4><p>Create and manage API keys</p></div>
+                <div class="feature"><h4>⚡ Rate Limiting</h4><p>Daily limits per key</p></div>
+                <div class="feature"><h4>👑 Owner</h4><p>@VIP_X_OFFICIAL</p></div>
+                <div class="feature"><h4>🤖 Telegram Bot</h4><p>Full admin control</p></div>
             </div>
             
             <div class="bot-link">
@@ -1555,19 +1213,13 @@ def home():
 def search_api():
     user_id = request.args.get('userid')
     result = search_telegram_id(user_id)
-    
-    # Agar result dictionary hai to jsonify karo
-    if isinstance(result, dict):
-        return jsonify(result), result.get('code', 500)
-    return result
+    return jsonify(result), result.get('code', 500)
 
 @app.route('/webhook', methods=['POST'])
 def telegram_webhook():
-    """Handle incoming Telegram updates"""
     try:
         update = request.json
         
-        # Handle callback queries
         if 'callback_query' in update:
             callback = update['callback_query']
             callback_id = callback['id']
@@ -1577,6 +1229,7 @@ def telegram_webhook():
             
             answer_callback(chat_id, callback_id, "Processing...")
             
+            # Main menu
             if data == "main_menu":
                 handle_start(chat_id, user_id)
             elif data == "stats":
@@ -1593,13 +1246,11 @@ def telegram_webhook():
                 handle_create_key_start(chat_id, user_id)
             elif data == "list_apis":
                 handle_list_apis(chat_id, user_id)
-            elif data == "add_api":
-                handle_add_api_start(chat_id, user_id)
-            elif data == "test_all_apis":
-                handle_test_all_apis(chat_id, user_id)
             elif data.startswith("view_api_"):
                 api_id = data.replace("view_api_", "")
                 handle_view_api(chat_id, user_id, api_id)
+            elif data == "add_api":
+                handle_add_api_start(chat_id, user_id)
             elif data.startswith("test_api_"):
                 api_id = data.replace("test_api_", "")
                 handle_test_api(chat_id, user_id, api_id)
@@ -1618,6 +1269,8 @@ def telegram_webhook():
             elif data.startswith("api_priority_down_"):
                 api_id = data.replace("api_priority_down_", "")
                 handle_api_priority(chat_id, user_id, api_id, "down")
+            elif data == "test_all_apis":
+                handle_test_all_apis(chat_id, user_id)
             elif data == "logs":
                 handle_all_logs(chat_id, user_id)
             elif data == "settings":
@@ -1626,10 +1279,6 @@ def telegram_webhook():
                 handle_edit_owner_start(chat_id, user_id)
             elif data == "edit_channel":
                 handle_edit_channel_start(chat_id, user_id)
-            elif data == "edit_default_limit":
-                handle_edit_default_limit_start(chat_id, user_id)
-            elif data == "edit_default_expiry":
-                handle_edit_default_expiry_start(chat_id, user_id)
             elif data.startswith("extend_key_"):
                 key_id = data.replace("extend_key_", "")
                 handle_extend_key(chat_id, user_id, key_id)
@@ -1645,14 +1294,13 @@ def telegram_webhook():
             
             return jsonify({"ok": True})
         
-        # Handle messages
         elif 'message' in update:
             msg = update['message']
             chat_id = msg['chat']['id']
             user_id = msg['from']['id']
             
             if not is_admin(user_id):
-                send_telegram_message(chat_id, "❌ Unauthorized! You are not an admin.")
+                send_telegram_message(chat_id, "❌ Unauthorized!")
                 return jsonify({"ok": True})
             
             if 'text' in msg:
@@ -1698,10 +1346,6 @@ def telegram_webhook():
                         handle_edit_owner(chat_id, user_id, text)
                     elif state == "editing_channel":
                         handle_edit_channel(chat_id, user_id, text)
-                    elif state == "editing_default_limit":
-                        handle_edit_default_limit(chat_id, user_id, text)
-                    elif state == "editing_default_expiry":
-                        handle_edit_default_expiry(chat_id, user_id, text)
                     else:
                         send_telegram_message(chat_id, "❌ Unknown command. Use /start")
         
@@ -1713,7 +1357,6 @@ def telegram_webhook():
 
 @app.route('/setwebhook', methods=['GET'])
 def set_webhook():
-    """Set Telegram webhook"""
     webhook_url = request.url_root.rstrip('/') + '/webhook'
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook"
     response = requests.post(url, json={'url': webhook_url})
@@ -1725,12 +1368,10 @@ def set_webhook():
 
 @app.route('/health', methods=['GET'])
 def health():
-    """Health check endpoint"""
-    active_apis = get_active_apis()
     return jsonify({
         "status": "healthy",
         "time": datetime.utcnow().isoformat(),
-        "active_apis": len(active_apis),
+        "active_apis": apis_col.count_documents({"status": "active"}),
         "total_keys": keys_col.count_documents({})
     })
 
@@ -1738,28 +1379,17 @@ def health():
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("🤖 Telegram Bot Admin Panel - With Dynamic API Management")
+    print("🤖 Telegram Bot Admin Panel - FULLY FIXED")
     print("=" * 60)
-    print(f"\n📊 Features Included:")
-    print("   ✅ Dynamic API Management (Add/Remove/Test APIs)")
-    print("   ✅ Automatic Failover (Next API if one fails)")
-    print("   ✅ API Health Testing")
-    print("   ✅ Priority Based API Selection")
-    print("   ✅ Key Management (Create, Edit, Delete, Extend)")
-    print("   ✅ Rate Limiting (Per key daily limits)")
-    print("   ✅ Statistics (Keys, Searches, APIs)")
-    print("   ✅ Logs (View all API calls)")
-    print("   ✅ Settings (Owner, Channel, Defaults)")
-    print("   ✅ Pagination (For large key lists)")
-    print("   ✅ State Management (Multi-step operations)")
-    print("   ✅ Admin Authorization")
-    print("\n🌐 Server Information:")
-    print(f"   📱 Port: {PORT}")
-    print(f"   📋 Health Check: /health")
-    print(f"   🤖 Webhook URL: /webhook")
-    print(f"   🔗 Set Webhook: /setwebhook")
-    print("\n✅ After deployment, visit:")
-    print(f"   https://your-app.herokuapp.com/setwebhook - To set webhook")
+    print(f"\n✅ Features:")
+    print("   ✅ Multiple API response formats supported")
+    print("   ✅ Vercel API format fixed")
+    print("   ✅ Dynamic API Management")
+    print("   ✅ Automatic Failover")
+    print("   ✅ Key Management")
+    print("   ✅ Rate Limiting")
+    print("   ✅ Telegram Bot Control")
+    print("\n🌐 Server starting on port:", PORT)
     print("=" * 60)
     
     app.run(host='0.0.0.0', port=PORT)
