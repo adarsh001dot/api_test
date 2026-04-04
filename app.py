@@ -70,7 +70,7 @@ def init_db():
         default_apis = [
             {
                 "name": "Vercel API",
-                "url": "https://tg-2-num-api-org.vercel.app/api/search?userid={user_id}",
+                "url": "https://exploitsindia.site/api/telegram.php?exploits={user_id}",
                 "method": "GET",
                 "status": "active",
                 "priority": 1,
@@ -82,9 +82,9 @@ def init_db():
             },
             {
                 "name": "Backup API",
-                "url": "https://z4x-telegram-to-number-api.onrender.com/search?key=Z4X-ERO8MSL9-Silent&userid={user_id}",
+                "url": "https://cyber-osint-tg-num.vercel.app/api/tginfo?key=Trail5&id={user_id}",
                 "method": "GET",
-                "status": "inactive",
+                "status": "active",
                 "priority": 2,
                 "success_count": 0,
                 "fail_count": 0,
