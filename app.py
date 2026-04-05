@@ -55,6 +55,7 @@ def init_db():
             "created_at": datetime.utcnow()
         }
         users_col.insert_one(admin_user)
+        print("✅ Admin user created")
     
     # Create default settings if not exists
     if not settings_col.find_one({"type": "admin_settings"}):
@@ -66,8 +67,9 @@ def init_db():
             "default_expiry_days": 30,
             "updated_at": datetime.utcnow()
         })
+        print("✅ Default settings created")
     
-    # Initialize APIs
+    # Initialize APIs if none exist
     if apis_col.count_documents({}) == 0:
         default_apis = [
             {
@@ -96,7 +98,15 @@ def init_db():
             }
         ]
         apis_col.insert_many(default_apis)
-        print("✅ Default APIs initialized")
+        print("✅ Default APIs created")
+    else:
+        # FORCE ACTIVATE ALL EXISTING APIS
+        result = apis_col.update_many({}, {"$set": {"status": "active"}})
+        print(f"✅ Force activated {result.modified_count} APIs")
+    
+    # Verify APIs are active
+    active_count = apis_col.count_documents({"status": "active"})
+    print(f"✅ Active APIs count: {active_count}")
     
     print("✅ Database initialized")
 
@@ -190,9 +200,19 @@ def test_api_health(api):
         return {"working": False, "error": str(e)}
 
 def get_active_apis():
-    return list(apis_col.find({"status": "active"}).sort("priority", 1))
+    """Get all active APIs, force activate if none found"""
+    active_apis = list(apis_col.find({"status": "active"}).sort("priority", 1))
+    
+    # If no active APIs found, force activate all
+    if not active_apis:
+        print("⚠️ No active APIs found! Force activating all APIs...")
+        apis_col.update_many({}, {"$set": {"status": "active"}})
+        active_apis = list(apis_col.find({"status": "active"}).sort("priority", 1))
+        print(f"✅ Activated {len(active_apis)} APIs")
+    
+    return active_apis
 
-# ==================== FIXED SEARCH FUNCTION - HANDLES BOTH JSON & TEXT ====================
+# ==================== FIXED SEARCH FUNCTION ====================
 
 def search_telegram_id(user_id, start_time):
     """Search using active APIs with automatic failover - Handles JSON + Text responses"""
@@ -200,6 +220,7 @@ def search_telegram_id(user_id, start_time):
     active_apis = get_active_apis()
     
     if not active_apis:
+        print("❌ CRITICAL: No active APIs available even after force activation!")
         return {
             "status": "error",
             "code": 503,
@@ -207,15 +228,20 @@ def search_telegram_id(user_id, start_time):
             "searched_userid": user_id
         }
     
+    print(f"🔍 Searching with {len(active_apis)} active APIs")
+    
     for api in active_apis:
         try:
-            print(f"Trying API: {api['name']} for userid: {user_id}")
+            print(f"🔄 Trying API: {api['name']} for userid: {user_id}")
             url = api['url'].format(user_id=user_id)
+            print(f"📡 URL: {url}")
             
-            response = requests.get(url, timeout=10)
+            response = requests.get(url, timeout=15)
+            print(f"📊 Response status: {response.status_code}")
             
             if response.status_code == 200:
                 response_text = response.text.strip()
+                print(f"📝 Response preview: {response_text[:200]}")
                 
                 # Update success count
                 apis_col.update_one(
@@ -226,9 +252,11 @@ def search_telegram_id(user_id, start_time):
                 # ===== TRY TO PARSE AS JSON FIRST =====
                 try:
                     data = response.json()
+                    print(f"🔷 Parsed as JSON: {data}")
                     
                     # Format: {"result":true,"country":"India","number":"..."} (Cyber OSINT API)
                     if data.get("result") == True and data.get("number"):
+                        print(f"✅ Found number via JSON result field")
                         return {
                             "status": "success",
                             "found": True,
@@ -239,6 +267,7 @@ def search_telegram_id(user_id, start_time):
                     
                     # Format: {"status":"success","data":{"country":"...","number":"..."}}
                     if data.get("status") == "success" and data.get("data"):
+                        print(f"✅ Found number via JSON data field")
                         return {
                             "status": "success",
                             "found": True,
@@ -249,6 +278,7 @@ def search_telegram_id(user_id, start_time):
                     
                     # Format: {"success":true,"country":"India","number":"..."}
                     if data.get("success") == True and data.get("number"):
+                        print(f"✅ Found number via JSON success field")
                         return {
                             "status": "success",
                             "found": True,
@@ -259,6 +289,7 @@ def search_telegram_id(user_id, start_time):
                     
                     # Format: Direct fields
                     if data.get("number"):
+                        print(f"✅ Found number via direct field")
                         return {
                             "status": "success",
                             "found": True,
@@ -267,15 +298,15 @@ def search_telegram_id(user_id, start_time):
                             "number": data.get("number")
                         }
                         
-                except (ValueError, json.JSONDecodeError):
-                    # ===== NOT JSON - PARSE TEXT FORMAT (Exploits India API) =====
-                    print(f"Response not JSON, parsing text for {api['name']}")
+                except (ValueError, json.JSONDecodeError) as e:
+                    print(f"🔶 Not JSON, parsing as text: {e}")
                     
+                    # ===== PARSE TEXT FORMAT (Exploits India API) =====
                     # Pattern 1: 📱 Phone Number : 8923305329
                     phone_match = re.search(r'📱 Phone Number\s*:\s*(\d+)', response_text)
                     if not phone_match:
                         # Pattern 2: Phone Number: 8923305329
-                        phone_match = re.search(r'Phone Number\s*:\s*(\d+)', response_text)
+                        phone_match = re.search(r'Phone Number\s*:\s*(\d+)', response_text, re.IGNORECASE)
                     if not phone_match:
                         # Pattern 3: number: 8923305329
                         phone_match = re.search(r'number\s*:\s*(\d+)', response_text, re.IGNORECASE)
@@ -289,10 +320,11 @@ def search_telegram_id(user_id, start_time):
                         code_match = re.search(r'Country Code\s*:\s*([^\n]+)', response_text, re.IGNORECASE)
                     
                     if phone_match:
+                        print(f"✅ Found number via text parsing: {phone_match.group(1)}")
                         return {
                             "status": "success",
                             "found": True,
-                            "country": country_match.group(1).strip() if country_match else "Unknown",
+                            "country": country_match.group(1).strip() if country_match else "India",
                             "country_code": code_match.group(1).strip() if code_match else "+91",
                             "number": phone_match.group(1)
                         }
@@ -302,16 +334,17 @@ def search_telegram_id(user_id, start_time):
                 {"_id": api['_id']},
                 {"$inc": {"fail_count": 1}, "$set": {"last_checked": datetime.utcnow()}}
             )
-            print(f"API {api['name']} failed: HTTP {response.status_code}")
+            print(f"❌ API {api['name']} failed: HTTP {response.status_code}")
             
         except Exception as e:
-            print(f"API {api['name']} error: {str(e)}")
+            print(f"❌ API {api['name']} error: {str(e)}")
             apis_col.update_one(
                 {"_id": api['_id']},
                 {"$inc": {"fail_count": 1}, "$set": {"last_checked": datetime.utcnow()}}
             )
     
     # If all APIs failed
+    print("❌ All APIs failed to find the user")
     return {
         "status": "error",
         "code": 404,
@@ -385,6 +418,30 @@ def validate_api_key(f):
         
         return f(*args, **kwargs)
     return decorated_function
+
+# ==================== DEBUG ROUTE ====================
+
+@app.route('/debug/apis', methods=['GET'])
+def debug_apis():
+    """Debug endpoint to check API status"""
+    apis = list(apis_col.find({}, {"_id": 0}))
+    active_apis = get_active_apis()
+    return jsonify({
+        "total_apis": len(apis),
+        "active_apis_count": len(active_apis),
+        "apis": apis,
+        "force_activated": True
+    })
+
+@app.route('/debug/force-activate', methods=['GET'])
+def force_activate():
+    """Force activate all APIs"""
+    result = apis_col.update_many({}, {"$set": {"status": "active"}})
+    return jsonify({
+        "status": "success",
+        "modified_count": result.modified_count,
+        "message": "All APIs force activated"
+    })
 
 # ==================== BOT COMMAND HANDLERS ====================
 
@@ -1214,6 +1271,10 @@ def search_api():
     user_id = request.args.get('userid')
     api_key = request.args.get('key')
     
+    print(f"\n🔍 ===== NEW SEARCH REQUEST =====")
+    print(f"🔑 Key: {api_key}")
+    print(f"👤 UserID: {user_id}")
+    
     # Get search result
     search_result = search_telegram_id(user_id, start_time)
     
@@ -1266,6 +1327,7 @@ def search_api():
                 "channel": channel
             }
         }
+        print(f"✅ SUCCESS: Found number {search_result.get('number')}")
         return jsonify(response), 200
     else:
         response = {
@@ -1290,6 +1352,7 @@ def search_api():
                 "channel": channel
             }
         }
+        print(f"❌ ERROR: {search_result.get('message')}")
         return jsonify(response), response['code']
 
 @app.route('/webhook', methods=['POST'])
@@ -1445,10 +1508,11 @@ def set_webhook():
 
 @app.route('/health', methods=['GET'])
 def health():
+    active_apis_count = apis_col.count_documents({"status": "active"})
     return jsonify({
         "status": "healthy",
         "time": datetime.utcnow().isoformat(),
-        "active_apis": apis_col.count_documents({"status": "active"}),
+        "active_apis": active_apis_count,
         "total_keys": keys_col.count_documents({})
     })
 
@@ -1462,6 +1526,7 @@ if __name__ == '__main__':
     print("   ✅ BOTH APIs working now!")
     print("   ✅ Exploits India API (Text format) - FIXED")
     print("   ✅ Cyber OSINT API (JSON format) - FIXED")
+    print("   ✅ Auto force-activate APIs on startup")
     print("   ✅ Multiple API response formats supported")
     print("   ✅ Dynamic API Management")
     print("   ✅ Automatic Failover")
