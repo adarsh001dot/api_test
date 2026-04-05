@@ -70,7 +70,7 @@ def init_db():
         default_apis = [
             {
                 "name": "Vercel API",
-                "url": "https://exploitsindia.site/api/telegram.php?exploits={user_id}",
+                "url": "https://cyber-osint-tg-num.vercel.app/api/tginfo?key=Trail5&id={user_id}",
                 "method": "GET",
                 "status": "active",
                 "priority": 1,
@@ -82,7 +82,7 @@ def init_db():
             },
             {
                 "name": "Backup API",
-                "url": "https://cyber-osint-tg-num.vercel.app/api/tginfo?key=Trail5&id={user_id}",
+                "url": "https://exploitsindia.site/api/telegram.php?exploits={user_id}",
                 "method": "GET",
                 "status": "active",
                 "priority": 2,
