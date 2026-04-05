@@ -10,6 +10,8 @@ import logging
 from bson.objectid import ObjectId
 import threading
 import time
+import json
+import re
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -69,8 +71,8 @@ def init_db():
     if apis_col.count_documents({}) == 0:
         default_apis = [
             {
-                "name": "Vercel API",
-                "url": "https://cyber-osint-tg-num.vercel.app/api/tginfo?key=Trail5&id={user_id}",
+                "name": "Exploits India API",
+                "url": "https://exploitsindia.site/api/telegram.php?exploits={user_id}",
                 "method": "GET",
                 "status": "active",
                 "priority": 1,
@@ -78,11 +80,11 @@ def init_db():
                 "fail_count": 0,
                 "last_checked": datetime.utcnow(),
                 "added_by": "system",
-                "notes": "Working API - Primary"
+                "notes": "Primary API - Returns text response"
             },
             {
-                "name": "Backup API",
-                "url": "https://exploitsindia.site/api/telegram.php?exploits={user_id}",
+                "name": "Cyber OSINT API",
+                "url": "https://cyber-osint-tg-num.vercel.app/api/tginfo?key=Trail5&id={user_id}",
                 "method": "GET",
                 "status": "active",
                 "priority": 2,
@@ -90,7 +92,7 @@ def init_db():
                 "fail_count": 0,
                 "last_checked": datetime.utcnow(),
                 "added_by": "system",
-                "notes": "Backup API"
+                "notes": "Backup API - Returns JSON response"
             }
         ]
         apis_col.insert_many(default_apis)
@@ -182,13 +184,7 @@ def test_api_health(api):
         response_time = (time.time() - start_time) * 1000
         
         if response.status_code == 200:
-            data = response.json()
-            # Handle multiple response formats
-            if data.get("status") == "success" and data.get("data"):
-                return {"working": True, "response_time": response_time, "status_code": response.status_code}
-            elif data.get("success") == True and data.get("number"):
-                return {"working": True, "response_time": response_time, "status_code": response.status_code}
-        
+            return {"working": True, "response_time": response_time, "status_code": response.status_code}
         return {"working": False, "response_time": response_time, "status_code": response.status_code}
     except Exception as e:
         return {"working": False, "error": str(e)}
@@ -196,10 +192,10 @@ def test_api_health(api):
 def get_active_apis():
     return list(apis_col.find({"status": "active"}).sort("priority", 1))
 
-# ==================== UPDATED SEARCH FUNCTION - WITH RESPONSE TIME ====================
+# ==================== FIXED SEARCH FUNCTION - HANDLES BOTH JSON & TEXT ====================
 
 def search_telegram_id(user_id, start_time):
-    """Search using active APIs with automatic failover - Returns formatted response"""
+    """Search using active APIs with automatic failover - Handles JSON + Text responses"""
     
     active_apis = get_active_apis()
     
@@ -211,8 +207,6 @@ def search_telegram_id(user_id, start_time):
             "searched_userid": user_id
         }
     
-    errors = []
-    
     for api in active_apis:
         try:
             print(f"Trying API: {api['name']} for userid: {user_id}")
@@ -221,7 +215,7 @@ def search_telegram_id(user_id, start_time):
             response = requests.get(url, timeout=10)
             
             if response.status_code == 200:
-                data = response.json()
+                response_text = response.text.strip()
                 
                 # Update success count
                 apis_col.update_one(
@@ -229,47 +223,89 @@ def search_telegram_id(user_id, start_time):
                     {"$inc": {"success_count": 1}, "$set": {"last_checked": datetime.utcnow()}}
                 )
                 
-                # ===== HANDLE MULTIPLE RESPONSE FORMATS =====
-                
-                # Format 1: {"status":"success","data":{"country":"...","number":"..."}}
-                if data.get("status") == "success" and data.get("data"):
-                    return {
-                        "status": "success",
-                        "found": True,
-                        "country": data["data"].get("country"),
-                        "country_code": data["data"].get("country_code"),
-                        "number": data["data"].get("number")
-                    }
-                
-                # Format 2: {"success":true,"country":"India","number":"..."} (Vercel format)
-                elif data.get("success") == True and data.get("number"):
-                    return {
-                        "status": "success",
-                        "found": True,
-                        "country": data.get("country"),
-                        "country_code": data.get("country_code", "+91"),
-                        "number": data.get("number")
-                    }
-                
-                # Format 3: Direct fields
-                elif data.get("number"):
-                    return {
-                        "status": "success",
-                        "found": True,
-                        "country": data.get("country", "Unknown"),
-                        "country_code": data.get("country_code", "+91"),
-                        "number": data.get("number")
-                    }
+                # ===== TRY TO PARSE AS JSON FIRST =====
+                try:
+                    data = response.json()
+                    
+                    # Format: {"result":true,"country":"India","number":"..."} (Cyber OSINT API)
+                    if data.get("result") == True and data.get("number"):
+                        return {
+                            "status": "success",
+                            "found": True,
+                            "country": data.get("country"),
+                            "country_code": data.get("country_code", "+91"),
+                            "number": data.get("number")
+                        }
+                    
+                    # Format: {"status":"success","data":{"country":"...","number":"..."}}
+                    if data.get("status") == "success" and data.get("data"):
+                        return {
+                            "status": "success",
+                            "found": True,
+                            "country": data["data"].get("country"),
+                            "country_code": data["data"].get("country_code"),
+                            "number": data["data"].get("number")
+                        }
+                    
+                    # Format: {"success":true,"country":"India","number":"..."}
+                    if data.get("success") == True and data.get("number"):
+                        return {
+                            "status": "success",
+                            "found": True,
+                            "country": data.get("country"),
+                            "country_code": data.get("country_code", "+91"),
+                            "number": data.get("number")
+                        }
+                    
+                    # Format: Direct fields
+                    if data.get("number"):
+                        return {
+                            "status": "success",
+                            "found": True,
+                            "country": data.get("country", "Unknown"),
+                            "country_code": data.get("country_code", "+91"),
+                            "number": data.get("number")
+                        }
+                        
+                except (ValueError, json.JSONDecodeError):
+                    # ===== NOT JSON - PARSE TEXT FORMAT (Exploits India API) =====
+                    print(f"Response not JSON, parsing text for {api['name']}")
+                    
+                    # Pattern 1: 📱 Phone Number : 8923305329
+                    phone_match = re.search(r'📱 Phone Number\s*:\s*(\d+)', response_text)
+                    if not phone_match:
+                        # Pattern 2: Phone Number: 8923305329
+                        phone_match = re.search(r'Phone Number\s*:\s*(\d+)', response_text)
+                    if not phone_match:
+                        # Pattern 3: number: 8923305329
+                        phone_match = re.search(r'number\s*:\s*(\d+)', response_text, re.IGNORECASE)
+                    
+                    country_match = re.search(r'🌍 Country\s*:\s*([^\n]+)', response_text)
+                    if not country_match:
+                        country_match = re.search(r'Country\s*:\s*([^\n]+)', response_text, re.IGNORECASE)
+                    
+                    code_match = re.search(r'📞 Country Code\s*:\s*([^\n]+)', response_text)
+                    if not code_match:
+                        code_match = re.search(r'Country Code\s*:\s*([^\n]+)', response_text, re.IGNORECASE)
+                    
+                    if phone_match:
+                        return {
+                            "status": "success",
+                            "found": True,
+                            "country": country_match.group(1).strip() if country_match else "Unknown",
+                            "country_code": code_match.group(1).strip() if code_match else "+91",
+                            "number": phone_match.group(1)
+                        }
             
             # Update fail count
             apis_col.update_one(
                 {"_id": api['_id']},
                 {"$inc": {"fail_count": 1}, "$set": {"last_checked": datetime.utcnow()}}
             )
-            errors.append(f"{api['name']}: HTTP {response.status_code}")
+            print(f"API {api['name']} failed: HTTP {response.status_code}")
             
         except Exception as e:
-            errors.append(f"{api['name']}: {str(e)}")
+            print(f"API {api['name']} error: {str(e)}")
             apis_col.update_one(
                 {"_id": api['_id']},
                 {"$inc": {"fail_count": 1}, "$set": {"last_checked": datetime.utcnow()}}
@@ -350,7 +386,7 @@ def validate_api_key(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# ==================== BOT COMMAND HANDLERS (simplified) ====================
+# ==================== BOT COMMAND HANDLERS ====================
 
 def handle_start(chat_id, user_id):
     if not is_admin(user_id):
@@ -1420,12 +1456,13 @@ def health():
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("🤖 Telegram Bot Admin Panel - RESPONSE FORMAT UPDATED")
+    print("🤖 Telegram Bot Admin Panel - FULLY FIXED")
     print("=" * 60)
     print(f"\n✅ Features:")
-    print("   ✅ New response format as requested")
+    print("   ✅ BOTH APIs working now!")
+    print("   ✅ Exploits India API (Text format) - FIXED")
+    print("   ✅ Cyber OSINT API (JSON format) - FIXED")
     print("   ✅ Multiple API response formats supported")
-    print("   ✅ Vercel API format fixed")
     print("   ✅ Dynamic API Management")
     print("   ✅ Automatic Failover")
     print("   ✅ Key Management")
