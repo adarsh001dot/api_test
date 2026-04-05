@@ -196,10 +196,10 @@ def test_api_health(api):
 def get_active_apis():
     return list(apis_col.find({"status": "active"}).sort("priority", 1))
 
-# ==================== UPDATED SEARCH FUNCTION - FIXED FORMAT ====================
+# ==================== UPDATED SEARCH FUNCTION - WITH RESPONSE TIME ====================
 
-def search_telegram_id(user_id):
-    """Search using active APIs with automatic failover - Handles multiple response formats"""
+def search_telegram_id(user_id, start_time):
+    """Search using active APIs with automatic failover - Returns formatted response"""
     
     active_apis = get_active_apis()
     
@@ -208,9 +208,7 @@ def search_telegram_id(user_id):
             "status": "error",
             "code": 503,
             "message": "No active APIs available",
-            "searched_userid": user_id,
-            "owner": "@VIP_X_OFFICIAL",
-            "channel": "https://t.me/WebBot_Lab"
+            "searched_userid": user_id
         }
     
     errors = []
@@ -237,54 +235,30 @@ def search_telegram_id(user_id):
                 if data.get("status") == "success" and data.get("data"):
                     return {
                         "status": "success",
-                        "code": 200,
-                        "searched_userid": user_id,
-                        "response_time": data.get("response_time", "N/A"),
-                        "data": {
-                            "found": True,
-                            "country": data["data"].get("country"),
-                            "country_code": data["data"].get("country_code"),
-                            "number": data["data"].get("number")
-                        },
-                        "source": api['name'],
-                        "owner": "@VIP_X_OFFICIAL",
-                        "channel": "https://t.me/WebBot_Lab"
+                        "found": True,
+                        "country": data["data"].get("country"),
+                        "country_code": data["data"].get("country_code"),
+                        "number": data["data"].get("number")
                     }
                 
                 # Format 2: {"success":true,"country":"India","number":"..."} (Vercel format)
                 elif data.get("success") == True and data.get("number"):
                     return {
                         "status": "success",
-                        "code": 200,
-                        "searched_userid": user_id,
-                        "response_time": "N/A",
-                        "data": {
-                            "found": True,
-                            "country": data.get("country"),
-                            "country_code": data.get("country_code", "+91"),
-                            "number": data.get("number")
-                        },
-                        "source": api['name'],
-                        "owner": "@VIP_X_OFFICIAL",
-                        "channel": "https://t.me/WebBot_Lab"
+                        "found": True,
+                        "country": data.get("country"),
+                        "country_code": data.get("country_code", "+91"),
+                        "number": data.get("number")
                     }
                 
                 # Format 3: Direct fields
                 elif data.get("number"):
                     return {
                         "status": "success",
-                        "code": 200,
-                        "searched_userid": user_id,
-                        "response_time": "N/A",
-                        "data": {
-                            "found": True,
-                            "country": data.get("country", "Unknown"),
-                            "country_code": data.get("country_code", "+91"),
-                            "number": data.get("number")
-                        },
-                        "source": api['name'],
-                        "owner": "@VIP_X_OFFICIAL",
-                        "channel": "https://t.me/WebBot_Lab"
+                        "found": True,
+                        "country": data.get("country", "Unknown"),
+                        "country_code": data.get("country_code", "+91"),
+                        "number": data.get("number")
                     }
             
             # Update fail count
@@ -306,10 +280,7 @@ def search_telegram_id(user_id):
         "status": "error",
         "code": 404,
         "message": "User ID not found in any database",
-        "searched_userid": user_id,
-        "errors": errors,
-        "owner": "@VIP_X_OFFICIAL",
-        "channel": "https://t.me/WebBot_Lab"
+        "searched_userid": user_id
     }
 
 # ==================== API KEY VALIDATION DECORATOR ====================
@@ -324,9 +295,7 @@ def validate_api_key(f):
             return jsonify({
                 "status": "error",
                 "code": 400,
-                "message": "Missing key or userid parameter",
-                "owner": "@VIP_X_OFFICIAL",
-                "channel": "https://t.me/WebBot_Lab"
+                "message": "Missing key or userid parameter"
             }), 400
         
         key_data = keys_col.find_one({"key": api_key})
@@ -335,18 +304,14 @@ def validate_api_key(f):
             return jsonify({
                 "status": "error",
                 "code": 401,
-                "message": "Invalid API key",
-                "owner": "@VIP_X_OFFICIAL",
-                "channel": "https://t.me/WebBot_Lab"
+                "message": "Invalid API key"
             }), 401
         
         if key_data['expires_on'] < datetime.utcnow():
             return jsonify({
                 "status": "error",
                 "code": 403,
-                "message": "API key has expired",
-                "owner": "@VIP_X_OFFICIAL",
-                "channel": "https://t.me/WebBot_Lab"
+                "message": "API key has expired"
             }), 403
         
         today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -363,9 +328,7 @@ def validate_api_key(f):
             return jsonify({
                 "status": "error",
                 "code": 429,
-                "message": f"Daily search limit reached. Used {search_count}/{daily_limit} today",
-                "owner": "@VIP_X_OFFICIAL",
-                "channel": "https://t.me/WebBot_Lab"
+                "message": f"Daily search limit reached. Used {search_count}/{daily_limit} today"
             }), 429
         
         request_id = str(uuid.uuid4())
@@ -1211,9 +1174,87 @@ def home():
 @app.route('/api/search', methods=['GET'])
 @validate_api_key
 def search_api():
+    start_time = time.time()
     user_id = request.args.get('userid')
-    result = search_telegram_id(user_id)
-    return jsonify(result), result.get('code', 500)
+    api_key = request.args.get('key')
+    
+    # Get search result
+    search_result = search_telegram_id(user_id, start_time)
+    
+    # Calculate response time
+    response_time_ms = (time.time() - start_time) * 1000
+    
+    # Get key info
+    key_data = request.key_data
+    created_at = key_data.get('created_at')
+    expires_on = key_data.get('expires_on')
+    daily_limit = request.daily_limit
+    searches_today = request.search_count - 1  # Current search not counted yet
+    
+    # Calculate remaining time
+    now = datetime.utcnow()
+    days_remaining = (expires_on - now).days
+    hours_remaining = int((expires_on - now).seconds / 3600)
+    
+    # Get owner and channel info
+    settings = settings_col.find_one({"type": "admin_settings"}) or {}
+    owner_name = settings.get('owner_display', '@VIP_X_OFFICIAL')
+    channel = settings.get('channel', 'https://t.me/WebBot_Lab')
+    
+    # Prepare response
+    if search_result.get('status') == 'success':
+        response = {
+            "status": "success",
+            "code": 200,
+            "request_id": request.request_id,
+            "response_time": f"{response_time_ms:.0f}ms",
+            "searched_userid": user_id,
+            "data": {
+                "found": search_result.get('found', True),
+                "country": search_result.get('country', 'Unknown'),
+                "country_code": search_result.get('country_code', '+91'),
+                "number": search_result.get('number', 'N/A')
+            },
+            "key_info": {
+                "key": api_key,
+                "created_at": created_at.strftime('%Y-%m-%d %H:%M:%S') if created_at else 'N/A',
+                "expires_on": expires_on.strftime('%Y-%m-%d %H:%M:%S') if expires_on else 'N/A',
+                "days_remaining": days_remaining,
+                "hours_remaining": hours_remaining,
+                "daily_limit": daily_limit,
+                "searches_today": searches_today,
+                "searches_remaining": daily_limit - searches_today
+            },
+            "owner": {
+                "name": owner_name,
+                "channel": channel
+            }
+        }
+        return jsonify(response), 200
+    else:
+        response = {
+            "status": "error",
+            "code": search_result.get('code', 404),
+            "request_id": request.request_id,
+            "response_time": f"{response_time_ms:.0f}ms",
+            "searched_userid": user_id,
+            "message": search_result.get('message', 'User ID not found'),
+            "key_info": {
+                "key": api_key,
+                "created_at": created_at.strftime('%Y-%m-%d %H:%M:%S') if created_at else 'N/A',
+                "expires_on": expires_on.strftime('%Y-%m-%d %H:%M:%S') if expires_on else 'N/A',
+                "days_remaining": days_remaining,
+                "hours_remaining": hours_remaining,
+                "daily_limit": daily_limit,
+                "searches_today": searches_today,
+                "searches_remaining": daily_limit - searches_today
+            },
+            "owner": {
+                "name": owner_name,
+                "channel": channel
+            }
+        }
+        return jsonify(response), response['code']
 
 @app.route('/webhook', methods=['POST'])
 def telegram_webhook():
@@ -1379,9 +1420,10 @@ def health():
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("🤖 Telegram Bot Admin Panel - FULLY FIXED")
+    print("🤖 Telegram Bot Admin Panel - RESPONSE FORMAT UPDATED")
     print("=" * 60)
     print(f"\n✅ Features:")
+    print("   ✅ New response format as requested")
     print("   ✅ Multiple API response formats supported")
     print("   ✅ Vercel API format fixed")
     print("   ✅ Dynamic API Management")
