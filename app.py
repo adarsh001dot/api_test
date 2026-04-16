@@ -73,8 +73,8 @@ def init_db():
     if apis_col.count_documents({}) == 0:
         default_apis = [
             {
-                "name": "Exploits India API",
-                "url": "https://exploitsindia.site/api/telegram.php?exploits={user_id}",
+                "name": "VIP India API",
+                "url": "https://all-in-one-api-hub.onrender.com/tg?key=Z4X-58E1I43X-Silent&userid={user_id}",
                 "method": "GET",
                 "status": "active",
                 "priority": 1,
@@ -85,8 +85,8 @@ def init_db():
                 "notes": "Primary API - Returns text response"
             },
             {
-                "name": "Cyber OSINT API",
-                "url": "https://cyber-osint-tg-num.vercel.app/api/tginfo?key=Trail5&id={user_id}",
+                "name": "VIP OSINT API",
+                "url": "https://all-in-one-api-hub.onrender.com/tg?key=Z4X-58E1I43X-Silent&userid={user_id}",
                 "method": "GET",
                 "status": "active",
                 "priority": 2,
